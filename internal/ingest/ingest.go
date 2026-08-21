@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -68,11 +69,30 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// Stats is a snapshot of what the consumer has done since it started.
+type Stats struct {
+	Appended   uint64    `json:"appended"`
+	Dropped    uint64    `json:"dropped"`
+	Failed     uint64    `json:"failed"`
+	LastAppend time.Time `json:"last_append,omitzero"`
+}
+
 // Ingest runs the durable consumer.
 type Ingest struct {
 	cfg   Config
 	store Appender
 	js    jetstream.JetStream
+
+	mu    sync.Mutex
+	stats Stats
+}
+
+// Stats returns a snapshot of the counters. Safe to call from another
+// goroutine while the consumer is running.
+func (i *Ingest) Stats() Stats {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.stats
 }
 
 // New builds an Ingest over an existing NATS connection.
@@ -140,6 +160,7 @@ func (i *Ingest) handle(ctx context.Context, msg jetstream.Msg) {
 	instanceID, ok := wire.InstanceIDFromSubject(msg.Subject())
 	if !ok {
 		log.Warn("dropping message on an unrecognised subject")
+		i.record(func(s *Stats) { s.Dropped++ })
 		i.terminate(log, msg)
 		return
 	}
@@ -147,26 +168,40 @@ func (i *Ingest) handle(ctx context.Context, msg jetstream.Msg) {
 	batch, err := wire.Decode(msg.Data())
 	if err != nil {
 		log.Warn("dropping undecodable batch", "error", err)
+		i.record(func(s *Stats) { s.Dropped++ })
 		i.terminate(log, msg)
 		return
 	}
 	if err := batch.Validate(); err != nil {
 		log.Warn("dropping empty batch", "error", err)
+		i.record(func(s *Stats) { s.Dropped++ })
 		i.terminate(log, msg)
 		return
 	}
 
 	if err := i.store.Append(ctx, instanceID, batch); err != nil {
 		log.Error("append failed, will redeliver", "instance_id", instanceID, "error", err)
+		i.record(func(s *Stats) { s.Failed++ })
 		if nakErr := msg.Nak(); nakErr != nil {
 			log.Error("nak failed", "error", nakErr)
 		}
 		return
 	}
 
+	i.record(func(s *Stats) {
+		s.Appended++
+		s.LastAppend = time.Now().UTC()
+	})
+
 	if err := msg.Ack(); err != nil {
 		log.Error("ack failed", "instance_id", instanceID, "error", err)
 	}
+}
+
+func (i *Ingest) record(f func(*Stats)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	f(&i.stats)
 }
 
 func (i *Ingest) terminate(log *slog.Logger, msg jetstream.Msg) {

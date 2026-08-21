@@ -284,3 +284,101 @@ func TestConfigDefaults(t *testing.T) {
 		t.Error("logger not defaulted")
 	}
 }
+
+// Stats must separate the two failure kinds. A dropped batch is a producer
+// bug, a failed one is a storage problem, and conflating them hides which.
+func TestStatsCountAppendsAndDrops(t *testing.T) {
+	nc := startNATS(t)
+	rec := &recorder{}
+
+	in, err := New(nc, rec, Config{AckWait: time.Second})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if got := in.Stats(); got.Appended != 0 || got.Dropped != 0 || got.Failed != 0 {
+		t.Errorf("fresh stats = %+v, want zeroes", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := in.Run(ctx); err != nil {
+			t.Errorf("run: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	waitForStream(t, nc)
+
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, []byte("{not json")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		got := in.Stats()
+		if got.Appended >= 1 && got.Dropped >= 1 {
+			if got.LastAppend.IsZero() {
+				t.Error("LastAppend not set after a successful append")
+			}
+			if got.Failed != 0 {
+				t.Errorf("Failed = %d, want 0: an undecodable batch is dropped, not failed", got.Failed)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("stats never reached one append and one drop: %+v", in.Stats())
+}
+
+// A store that rejects the append counts as failed, not dropped: the message
+// is redelivered rather than discarded.
+func TestStatsCountFailedAppends(t *testing.T) {
+	nc := startNATS(t)
+	rec := &recorder{fail: errors.New("disk on fire")}
+
+	in, err := New(nc, rec, Config{AckWait: time.Second})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := in.Run(ctx); err != nil {
+			t.Errorf("run: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	waitForStream(t, nc)
+
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		got := in.Stats()
+		if got.Failed >= 1 {
+			if got.Appended != 0 {
+				t.Errorf("Appended = %d, want 0", got.Appended)
+			}
+			if !got.LastAppend.IsZero() {
+				t.Error("LastAppend set despite no successful append")
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("no failure recorded: %+v", in.Stats())
+}
