@@ -1,0 +1,29 @@
+version: 2
+
+updates:
+  # Goanna's module graph is ~300 modules, almost all of them transitive
+  # through prometheus/prometheus: importing tsdb pulls prometheus/config,
+  # which reaches every service-discovery provider (Kubernetes, Azure, EC2,
+  # Consul and the rest). None of it is called. Alerting on all of it would
+  # bury the four dependencies we actually chose.
+  #
+  # govulncheck runs in preflight and is symbol-reachability based, so a real
+  # vulnerability in transitive code we do call is still caught there.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-type: direct
+    groups:
+      prometheus:
+        patterns:
+          - "github.com/prometheus/*"
+      nats:
+        patterns:
+          - "github.com/nats-io/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

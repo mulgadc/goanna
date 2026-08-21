@@ -244,3 +244,33 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+func TestReady(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.Ready(); err != nil {
+		t.Errorf("Ready() on an open store: %v", err)
+	}
+}
+
+func TestStatsCountsSeries(t *testing.T) {
+	s := openTestStore(t)
+	const ts = 1787279400000
+
+	if got := s.Stats()["series"]; got != uint64(0) {
+		t.Errorf("series before any append = %v, want 0", got)
+	}
+	if err := s.Append(context.Background(), testInstance, testBatch(ts)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	stats := s.Stats()
+	if stats["series"] != uint64(2) {
+		t.Errorf("series = %v, want 2", stats["series"])
+	}
+	if stats["max_time"] != int64(ts) {
+		t.Errorf("max_time = %v, want %d", stats["max_time"], ts)
+	}
+	if _, ok := stats["blocks"]; !ok {
+		t.Error("blocks missing")
+	}
+}

@@ -114,6 +114,31 @@ func (s *Store) Querier(mint, maxt int64) (storage.Querier, error) {
 	return q, nil
 }
 
+// Ready reports whether the TSDB can still be read. It opens and closes a
+// querier over an empty range, which touches the block list without scanning
+// any samples.
+func (s *Store) Ready() error {
+	q, err := s.Querier(0, 0)
+	if err != nil {
+		return err
+	}
+	if err := q.Close(); err != nil {
+		return fmt.Errorf("store: close readiness querier: %w", err)
+	}
+	return nil
+}
+
+// Stats reports what the head currently holds, for the status endpoint.
+func (s *Store) Stats() map[string]any {
+	head := s.db.Head()
+	return map[string]any{
+		"series":   head.NumSeries(),
+		"min_time": head.MinTime(),
+		"max_time": head.MaxTime(),
+		"blocks":   len(s.db.Blocks()),
+	}
+}
+
 // Close flushes and closes the TSDB.
 func (s *Store) Close() error {
 	if err := s.db.Close(); err != nil {

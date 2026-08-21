@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,6 +55,7 @@ func TestRunIngestsAndShutsDown(t *testing.T) {
 		retention:  24 * time.Hour,
 		logLevel:   "error",
 		streamName: ingest.DefaultStream,
+		healthAddr: freeAddr(t),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -105,6 +108,20 @@ func TestRunIngestsAndShutsDown(t *testing.T) {
 		t.Error("goannad did not acknowledge a published batch")
 	}
 
+	// The status endpoint must show the batch that just landed, which is how
+	// a deployment is verified without shelling into the TSDB.
+	status := getJSON(t, "http://"+cfg.healthAddr+"/statusz")
+	stats, ok := status["ingest"].(map[string]any)
+	if !ok {
+		t.Fatalf("statusz has no ingest detail: %v", status)
+	}
+	if appended, _ := stats["appended"].(float64); appended < 1 {
+		t.Errorf("statusz reports appended = %v, want at least 1", stats["appended"])
+	}
+	if ready := getJSON(t, "http://"+cfg.healthAddr+"/readyz"); ready["status"] != "ready" {
+		t.Errorf("readyz = %v, want ready", ready["status"])
+	}
+
 	cancel()
 	select {
 	case err := <-done:
@@ -114,6 +131,41 @@ func TestRunIngestsAndShutsDown(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("run did not return after cancel")
 	}
+}
+
+// freeAddr returns a loopback address nothing is listening on. There is a
+// race between closing and rebinding, which is acceptable in a test and the
+// only way to get a port without changing run's signature.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return addr
+}
+
+func getJSON(t *testing.T, url string) map[string]any {
+	t.Helper()
+	resp, err := http.Get(url) //nolint:noctx // short-lived probe in a test
+	if err != nil {
+		t.Fatalf("get %s: %v", url, err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close body: %v", err)
+		}
+	}()
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode %s: %v", url, err)
+	}
+	return body
 }
 
 func TestRunRejectsBadLogLevel(t *testing.T) {

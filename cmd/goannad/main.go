@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"golang.org/x/sync/errgroup"
 
+	"github.com/mulgadc/goanna/internal/health"
 	"github.com/mulgadc/goanna/internal/ingest"
 	"github.com/mulgadc/goanna/internal/store"
 )
@@ -32,6 +34,7 @@ type config struct {
 	retention  time.Duration
 	logLevel   string
 	streamName string
+	healthAddr string
 }
 
 func main() {
@@ -88,8 +91,37 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 
-	logger.Info("consuming", "subject", ingest.DefaultSubject)
-	if err := in.Run(ctx); err != nil {
+	probes := health.New(health.Options{
+		Version: Version,
+		Checks: map[string]health.Check{
+			"nats": func() error {
+				if !nc.IsConnected() {
+					return fmt.Errorf("not connected to %s", cfg.natsURL)
+				}
+				return nil
+			},
+			"store": metrics.Ready,
+		},
+		Details: map[string]health.Detail{
+			"ingest": func() any { return in.Stats() },
+			"store":  func() any { return metrics.Stats() },
+		},
+		Logger: logger,
+	})
+
+	// Readiness deliberately excludes metric freshness. A node with no
+	// running guests produces no batches, and that is healthy.
+	group, gctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		logger.Info("serving health", "addr", cfg.healthAddr)
+		return probes.Serve(gctx, cfg.healthAddr)
+	})
+	group.Go(func() error {
+		logger.Info("consuming", "subject", ingest.DefaultSubject)
+		return in.Run(gctx)
+	})
+
+	if err := group.Wait(); err != nil {
 		return err
 	}
 	logger.Info("shutting down")
@@ -105,6 +137,7 @@ func parseFlags(fs *flag.FlagSet, args []string) (config, error) {
 	fs.StringVar(&cfg.natsToken, "nats-token", env("GOANNA_NATS_TOKEN", ""), "NATS auth token")
 	fs.StringVar(&cfg.dataDir, "data-dir", env("GOANNA_DATA_DIR", "/var/lib/goanna/tsdb"), "TSDB directory")
 	fs.StringVar(&cfg.logLevel, "log-level", env("GOANNA_LOG_LEVEL", "info"), "debug, info, warn or error")
+	fs.StringVar(&cfg.healthAddr, "health-addr", env("GOANNA_HEALTH_ADDR", "127.0.0.1:8445"), "liveness, readiness and status listener")
 	fs.StringVar(&cfg.streamName, "stream", env("GOANNA_STREAM", ingest.DefaultStream), "JetStream stream name")
 	fs.DurationVar(&cfg.retention, "retention", 15*24*time.Hour, "how long to keep samples locally")
 	if err := fs.Parse(args); err != nil {

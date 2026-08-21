@@ -8,7 +8,7 @@ Goanna is the **tenant** plane. It stores and serves only what a customer owns, 
 
 ## What it does today
 
-`goannad` subscribes to the per-VM metric batches spinifex publishes on `metrics.ec2.<instance-id>` and appends them to an embedded Prometheus TSDB.
+`goannad` subscribes to the per-VM metric batches spinifex publishes on `metrics.ec2.<instance-id>` and appends them to an embedded Prometheus TSDB. It serves liveness, readiness and status endpoints; there is no CloudWatch API yet.
 
 ```
 spinifex qmp-collector ──NATS──▶ JetStream ──▶ goannad ──▶ TSDB
@@ -50,8 +50,40 @@ make build
 | `--nats-token` | `GOANNA_NATS_TOKEN` | — |
 | `--data-dir` | `GOANNA_DATA_DIR` | `/var/lib/goanna/tsdb` |
 | `--stream` | `GOANNA_STREAM` | `GOANNA_METRICS` |
+| `--health-addr` | `GOANNA_HEALTH_ADDR` | `127.0.0.1:8445` |
 | `--log-level` | `GOANNA_LOG_LEVEL` | `info` |
 | `--retention` | — | `360h` (15d) |
+
+## Endpoints
+
+| Path | Meaning |
+|---|---|
+| `/healthz` | liveness. Always 200 while the process serves. Checks nothing else, so a NATS outage does not trigger a restart. |
+| `/readyz` | 200 when NATS is connected and the TSDB is readable, 503 otherwise, naming the failing check. |
+| `/statusz` | version, uptime, ingest counters and TSDB head stats. Diagnostic only. |
+
+Readiness deliberately excludes metric freshness. A node with no running guests
+produces no batches, and that is healthy rather than broken.
+
+## Storage
+
+The hot tier is a local TSDB. predastore is the cold tier, not a replacement:
+S3 has no append, so a 60s batch per instance would mean roughly 1,440 objects
+per instance per day. The local head batches into blocks that get shipped whole,
+which is the Thanos/Mimir shape with our own S3 underneath.
+
+**Phase 1 limitation:** the hot tier is unreplicated and lives on one node. The
+JetStream stream retains raw batches for 24h, so a rebuild inside a day replays
+clean. Past that there is no recovery until the block flush lands in Phase 3.
+
+## Dependencies
+
+Importing `prometheus/prometheus/tsdb` pulls `prometheus/config`, which reaches
+every service-discovery provider — Kubernetes and Azure SDK packages end up
+linked into the binary. Nothing calls them; `tsdb.DB.ApplyConfig` exists for the
+Prometheus server's YAML reload and Go compiles at package granularity, so there
+is no import that avoids it. `.github/dependabot.yml` scopes alerts to direct
+dependencies, and `govulncheck` in preflight catches anything reachable.
 
 ## Development
 
