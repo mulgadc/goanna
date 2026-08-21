@@ -70,7 +70,7 @@ func (s *Store) Append(ctx context.Context, instanceID string, b wire.Batch) err
 			s.log.Warn("skipping unnamed series", "instance_id", instanceID)
 			continue
 		}
-		if _, err := app.Append(0, seriesLabels(instanceID, series), b.TS, series.Value); err != nil {
+		if _, err := app.Append(0, seriesLabels(instanceID, series), b.TimestampMS(), series.Value); err != nil {
 			// Rollback so a failed batch leaves nothing behind for the
 			// redelivery to duplicate.
 			if rbErr := app.Rollback(); rbErr != nil {

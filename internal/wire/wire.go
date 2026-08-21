@@ -22,8 +22,18 @@ const SubjectPrefix = "metrics.ec2."
 
 // Errors returned by Decode and Validate.
 var (
-	ErrNoSeries    = errors.New("batch carries no series")
-	ErrNoTimestamp = errors.New("batch has no timestamp")
+	ErrNoSeries            = errors.New("batch carries no series")
+	ErrNoTimestamp         = errors.New("batch has no timestamp")
+	ErrTimestampNotSeconds = errors.New("batch timestamp is not Unix seconds")
+)
+
+// The producer emits time.Time.Unix(), so a plausible batch timestamp is a
+// second count. These bounds exist to catch the producer switching units:
+// milliseconds would sail through as a year-58000 timestamp, and every
+// sample would be stored somewhere no query looks.
+const (
+	minPlausibleTS = 1_000_000_000  // 2001-09-09
+	maxPlausibleTS = 10_000_000_000 // 2286-11-20
 )
 
 // Series is one CloudWatch-mappable datapoint.
@@ -36,8 +46,9 @@ type Series struct {
 
 // Batch is one collection tick for one instance.
 type Batch struct {
-	// TS is milliseconds since the epoch, matching what the TSDB appender
-	// wants and what the producer emits.
+	// TS is Unix SECONDS, which is what the collector publishes. The TSDB
+	// appender wants milliseconds, so nothing may pass this straight to it —
+	// use TimestampMS.
 	TS            int64    `json:"ts"`
 	PeriodSeconds int      `json:"period_seconds"`
 	Node          string   `json:"node,omitempty"`
@@ -64,6 +75,9 @@ func (b Batch) Validate() error {
 	if b.TS <= 0 {
 		return ErrNoTimestamp
 	}
+	if b.TS < minPlausibleTS || b.TS > maxPlausibleTS {
+		return fmt.Errorf("%w: %d", ErrTimestampNotSeconds, b.TS)
+	}
 	if len(b.Series) == 0 {
 		return ErrNoSeries
 	}
@@ -72,7 +86,13 @@ func (b Batch) Validate() error {
 
 // Time is the batch's collection time.
 func (b Batch) Time() time.Time {
-	return time.UnixMilli(b.TS)
+	return time.Unix(b.TS, 0).UTC()
+}
+
+// TimestampMS is the batch time in milliseconds, the unit the TSDB indexes
+// on. Appending b.TS directly stores every sample in 1970.
+func (b Batch) TimestampMS() int64 {
+	return b.TS * 1000
 }
 
 // InstanceIDFromSubject returns the instance the subject carries metrics

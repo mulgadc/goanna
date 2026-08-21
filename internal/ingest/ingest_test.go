@@ -161,7 +161,7 @@ func TestCorePublishIsCapturedByTheStream(t *testing.T) {
 	store := &recorder{}
 	runIngest(t, nc, store)
 
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if err := nc.Flush(); err != nil {
@@ -197,7 +197,7 @@ func TestMessagesPublishedBeforeStartAreReplayed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create stream: %v", err)
 	}
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if err := nc.Flush(); err != nil {
@@ -218,7 +218,7 @@ func TestUndecodableMessageIsTerminatedNotRetried(t *testing.T) {
 	if err := nc.Publish(wire.SubjectPrefix+testInstance, []byte("{not json")); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if err := nc.Flush(); err != nil {
@@ -246,7 +246,7 @@ func TestFailedAppendIsRedelivered(t *testing.T) {
 	store := &recorder{fail: errors.New("disk full")}
 	runIngest(t, nc, store)
 
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if err := nc.Flush(); err != nil {
@@ -313,7 +313,7 @@ func TestStatsCountAppendsAndDrops(t *testing.T) {
 	})
 	waitForStream(t, nc)
 
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if err := nc.Publish(wire.SubjectPrefix+testInstance, []byte("{not json")); err != nil {
@@ -362,7 +362,7 @@ func TestStatsCountFailedAppends(t *testing.T) {
 	})
 	waitForStream(t, nc)
 
-	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787279400000)); err != nil {
+	if err := nc.Publish(wire.SubjectPrefix+testInstance, payload(t, 1787284904)); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 

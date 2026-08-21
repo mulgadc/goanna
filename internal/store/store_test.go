@@ -12,6 +12,9 @@ import (
 
 const testInstance = "i-0abc123def4567890"
 
+// The wire carries seconds; the TSDB indexes milliseconds.
+const tsMS = 1787284904 * 1000
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(Options{Dir: t.TempDir()})
@@ -80,13 +83,13 @@ func collect(t *testing.T, s *Store, mint, maxt int64) map[string][]float64 {
 
 func TestAppendRoundTrips(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	if err := s.Append(context.Background(), testInstance, testBatch(ts)); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
-	got := collect(t, s, ts-1000, ts+1000)
+	got := collect(t, s, tsMS-1000, tsMS+1000)
 	if len(got) != 2 {
 		t.Fatalf("series stored = %d, want 2: %v", len(got), got)
 	}
@@ -107,13 +110,13 @@ func TestAppendRoundTrips(t *testing.T) {
 
 func TestAppendStoresEveryLabel(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	if err := s.Append(context.Background(), testInstance, testBatch(ts)); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
-	for key := range collect(t, s, ts-1000, ts+1000) {
+	for key := range collect(t, s, tsMS-1000, tsMS+1000) {
 		for _, want := range []string{"namespace=", "account_id=", "instance_id=", "__name__="} {
 			if !contains(key, want) {
 				t.Errorf("label %q missing from %s", want, key)
@@ -126,7 +129,7 @@ func TestAppendStoresEveryLabel(t *testing.T) {
 // win, or one guest's metrics land under another's id.
 func TestSubjectInstanceIDOverridesLabel(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	b := testBatch(ts)
 	b.Series[0].Labels = map[string]string{"instance_id": "i-someone-else"}
@@ -134,7 +137,7 @@ func TestSubjectInstanceIDOverridesLabel(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	for key := range collect(t, s, ts-1000, ts+1000) {
+	for key := range collect(t, s, tsMS-1000, tsMS+1000) {
 		if contains(key, "i-someone-else") {
 			t.Errorf("label overrode the subject's instance id: %s", key)
 		}
@@ -150,7 +153,7 @@ func TestAppendRejectsInvalidBatch(t *testing.T) {
 
 func TestAppendIsAtomic(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	// Land a batch, then send a second one whose last series contradicts a
 	// committed sample. The appender refuses that, and the new series ahead
@@ -168,7 +171,7 @@ func TestAppendIsAtomic(t *testing.T) {
 		t.Fatal("want error for a sample contradicting a committed one")
 	}
 
-	for key, values := range collect(t, s, ts-1000, ts+1000) {
+	for key, values := range collect(t, s, tsMS-1000, tsMS+1000) {
 		if contains(key, "disk_read_ops") {
 			t.Errorf("rolled-back batch left %s behind", key)
 		}
@@ -182,7 +185,7 @@ func TestAppendIsAtomic(t *testing.T) {
 // series that were named.
 func TestAppendSkipsUnnamedSeries(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	b := testBatch(ts)
 	b.Series[1].Name = ""
@@ -190,7 +193,7 @@ func TestAppendSkipsUnnamedSeries(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	got := collect(t, s, ts-1000, ts+1000)
+	got := collect(t, s, tsMS-1000, tsMS+1000)
 	if len(got) != 1 {
 		t.Errorf("series stored = %d, want 1 (the named one): %v", len(got), got)
 	}
@@ -204,7 +207,7 @@ func TestOpenRequiresDir(t *testing.T) {
 
 func TestReopenKeepsData(t *testing.T) {
 	dir := t.TempDir()
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	first, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -227,7 +230,7 @@ func TestReopenKeepsData(t *testing.T) {
 		}
 	}()
 
-	if got := collect(t, second, ts-1000, ts+1000); len(got) != 2 {
+	if got := collect(t, second, tsMS-1000, tsMS+1000); len(got) != 2 {
 		t.Errorf("series after reopen = %d, want 2", len(got))
 	}
 }
@@ -254,7 +257,7 @@ func TestReady(t *testing.T) {
 
 func TestStatsCountsSeries(t *testing.T) {
 	s := openTestStore(t)
-	const ts = 1787279400000
+	const ts = 1787284904 // Unix seconds, as the producer emits
 
 	if got := s.Stats()["series"]; got != uint64(0) {
 		t.Errorf("series before any append = %v, want 0", got)
@@ -267,8 +270,8 @@ func TestStatsCountsSeries(t *testing.T) {
 	if stats["series"] != uint64(2) {
 		t.Errorf("series = %v, want 2", stats["series"])
 	}
-	if stats["max_time"] != int64(ts) {
-		t.Errorf("max_time = %v, want %d", stats["max_time"], ts)
+	if stats["max_time"] != int64(tsMS) {
+		t.Errorf("max_time = %v, want %d", stats["max_time"], tsMS)
 	}
 	if _, ok := stats["blocks"]; !ok {
 		t.Error("blocks missing")
