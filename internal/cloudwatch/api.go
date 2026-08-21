@@ -77,36 +77,43 @@ func New(opts Options) (*Server, error) {
 	return &Server{store: opts.Store, log: log, now: now}, nil
 }
 
-// ServeHTTP dispatches an AWS query-protocol request. Every action funnels
-// through here so the identity check cannot be skipped by one handler.
+// ServeHTTP dispatches a CloudWatch request in either wire protocol. Every
+// action funnels through here so the identity check cannot be skipped by one
+// handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.NewString()
+	proto := wireOf(r)
 
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
-		writeError(w, s.log, requestID, senderError("InvalidAction",
+		writeError(w, s.log, requestID, proto, senderError("InvalidAction",
 			"The request method is not supported.", http.StatusMethodNotAllowed))
 		return
 	}
 
-	if err := r.ParseForm(); err != nil {
-		writeError(w, s.log, requestID, senderError("MalformedQueryString",
-			"The query string is malformed.", http.StatusBadRequest))
+	action, form, err := s.decode(r, proto)
+	if err != nil {
+		writeError(w, s.log, requestID, proto, err)
 		return
 	}
-	form := params(r.Form)
 
 	// A request that reached here without an identity means the middleware was
 	// not wired in. Refuse rather than serve one tenant's data unscoped.
 	identity, ok := IdentityFrom(r.Context())
 	if !ok || identity.AccountID == "" {
-		writeError(w, s.log, requestID, accessDenied("The request was not authenticated."))
+		writeError(w, s.log, requestID, proto, accessDenied("The request was not authenticated."))
 		return
 	}
 
-	action := form.get("Action")
 	doc, err := s.dispatch(r.Context(), action, form, identity, requestID)
 	if err != nil {
-		writeError(w, s.log, requestID, err)
+		writeError(w, s.log, requestID, proto, err)
+		return
+	}
+
+	if proto == wireJSON {
+		if err := writeJSON(w, http.StatusOK, toJSONResponse(doc)); err != nil {
+			s.log.Warn("writing cloudwatch response", "action", action, "error", err)
+		}
 		return
 	}
 
@@ -115,6 +122,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := writeXML(w, doc); err != nil {
 		s.log.Warn("writing cloudwatch response", "action", action, "error", err)
 	}
+}
+
+// decode reads the action and its parameters out of whichever protocol the
+// caller used. The body is read only once: ParseForm would consume a JSON body
+// and leave nothing to decode.
+func (s *Server) decode(r *http.Request, proto wire) (string, params, error) {
+	if proto == wireJSON {
+		form, err := decodeJSONBody(r)
+		if err != nil {
+			return "", nil, err
+		}
+		return jsonAction(r), form, nil
+	}
+
+	if err := r.ParseForm(); err != nil {
+		return "", nil, senderError("MalformedQueryString",
+			"The query string is malformed.", http.StatusBadRequest)
+	}
+	form := params(r.Form)
+	return form.get("Action"), form, nil
 }
 
 func (s *Server) dispatch(ctx context.Context, action string, form params,

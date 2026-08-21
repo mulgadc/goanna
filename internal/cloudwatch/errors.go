@@ -68,9 +68,11 @@ func internalError(log *slog.Logger, action string, err error) *apiError {
 
 // WriteAuthError renders an authentication failure in the CloudWatch error
 // shape. It is exported for the auth middleware, which rejects a request
-// before any handler in this package sees it.
-func WriteAuthError(w http.ResponseWriter, log *slog.Logger, code, message string, status int) {
-	writeError(w, log, uuid.NewString(), senderError(code, message, status))
+// before any handler in this package sees it. The request decides the
+// protocol, so a rejection reads the same way as a success would have.
+func WriteAuthError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
+	code, message string, status int) {
+	writeError(w, log, uuid.NewString(), wireOf(r), senderError(code, message, status))
 }
 
 // errorResponse is the wire form of a rejected request.
@@ -85,12 +87,24 @@ type errorResponse struct {
 	RequestID string `xml:"RequestId"`
 }
 
-// writeError renders err as an ErrorResponse. A non-apiError is reported as an
-// internal failure rather than surfacing its text, which may name internals.
-func writeError(w http.ResponseWriter, log *slog.Logger, requestID string, err error) {
+// writeError renders err in the caller's protocol. A non-apiError is reported
+// as an internal failure rather than surfacing its text, which may name
+// internals.
+func writeError(w http.ResponseWriter, log *slog.Logger, requestID string, proto wire, err error) {
 	var apiErr *apiError
 	if !errors.As(err, &apiErr) {
 		apiErr = internalError(log, "", err)
+	}
+
+	if proto == wireJSON {
+		// A client in query mode reads the query-protocol code from this
+		// header rather than from __type, so both carry it.
+		w.Header().Set(queryErrorHeader, apiErr.Code+";"+apiErr.Fault)
+		if err := writeJSON(w, apiErr.Status,
+			jsonError{Type: apiErr.Code, Message: apiErr.Message}); err != nil {
+			log.Warn("writing cloudwatch error response", "error", err)
+		}
+		return
 	}
 
 	var resp errorResponse

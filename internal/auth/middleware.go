@@ -59,7 +59,7 @@ func Middleware(opts MiddlewareOptions) func(http.Handler) http.Handler {
 				log.Warn("auth failure: unexpected service in credential scope",
 					"access_key_id", signed.Credential.AccessKeyID,
 					"service", signed.Credential.Service)
-				cloudwatch.WriteAuthError(w, log, "SignatureDoesNotMatch",
+				cloudwatch.WriteAuthError(w, r, log, "SignatureDoesNotMatch",
 					"The request signature we calculated does not match the signature you provided.",
 					http.StatusForbidden)
 				return
@@ -67,7 +67,7 @@ func Middleware(opts MiddlewareOptions) func(http.Handler) http.Handler {
 
 			cred, err := opts.Provider.Lookup(r.Context(), signed.Credential.AccessKeyID)
 			if err != nil {
-				writeLookupError(w, log, signed.Credential.AccessKeyID, err)
+				writeLookupError(w, r, log, signed.Credential.AccessKeyID, err)
 				return
 			}
 
@@ -81,7 +81,7 @@ func Middleware(opts MiddlewareOptions) func(http.Handler) http.Handler {
 					"region", signed.Credential.Region,
 					"canonical_request", signed.CanonicalRequest(),
 					"error", err)
-				cloudwatch.WriteAuthError(w, log, "SignatureDoesNotMatch",
+				cloudwatch.WriteAuthError(w, r, log, "SignatureDoesNotMatch",
 					"The request signature we calculated does not match the signature you provided. "+
 						"Check your AWS Secret Access Key and signing method.",
 					http.StatusForbidden)
@@ -104,10 +104,10 @@ func Middleware(opts MiddlewareOptions) func(http.Handler) http.Handler {
 func writeParseError(w http.ResponseWriter, log *slog.Logger, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, sigv4.ErrMissingAuthentication):
-		cloudwatch.WriteAuthError(w, log, "MissingAuthenticationToken",
+		cloudwatch.WriteAuthError(w, r, log, "MissingAuthenticationToken",
 			"Request is missing Authentication Token.", http.StatusForbidden)
 	case errors.Is(err, sigv4.ErrPayloadTooLarge):
-		cloudwatch.WriteAuthError(w, log, "RequestEntityTooLarge",
+		cloudwatch.WriteAuthError(w, r, log, "RequestEntityTooLarge",
 			"The request payload is too large.", http.StatusRequestEntityTooLarge)
 	case errors.Is(err, sigv4.ErrRequestTimeTooSkewed):
 		// AWS reports skew as SignatureDoesNotMatch, which is
@@ -116,12 +116,12 @@ func writeParseError(w http.ResponseWriter, log *slog.Logger, r *http.Request, e
 		log.Warn("auth failure: request time too skewed",
 			"remote_addr", r.RemoteAddr,
 			"max_skew_ms", sigv4.MaxClockSkew.Milliseconds())
-		cloudwatch.WriteAuthError(w, log, "SignatureDoesNotMatch",
+		cloudwatch.WriteAuthError(w, r, log, "SignatureDoesNotMatch",
 			"Signature expired or not yet current.", http.StatusForbidden)
 	default:
 		log.Warn("auth failure: malformed signature envelope",
 			"remote_addr", r.RemoteAddr, "error", err)
-		cloudwatch.WriteAuthError(w, log, "IncompleteSignature",
+		cloudwatch.WriteAuthError(w, r, log, "IncompleteSignature",
 			"The request signature does not conform to AWS standards.", http.StatusBadRequest)
 	}
 }
@@ -129,22 +129,23 @@ func writeParseError(w http.ResponseWriter, log *slog.Logger, r *http.Request, e
 // writeLookupError keeps an unknown, inactive and undecryptable key
 // indistinguishable to the caller while separating them from an IAM outage,
 // which must not look like a bad credential.
-func writeLookupError(w http.ResponseWriter, log *slog.Logger, accessKeyID string, err error) {
+func writeLookupError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
+	accessKeyID string, err error) {
 	switch {
 	case errors.Is(err, ErrExpired):
-		cloudwatch.WriteAuthError(w, log, "ExpiredToken",
+		cloudwatch.WriteAuthError(w, r, log, "ExpiredToken",
 			"The security token included in the request is expired.", http.StatusForbidden)
 	case errors.Is(err, ErrKeyNotFound):
 		log.Warn("auth failure: access key not resolvable", "access_key_id", accessKeyID)
-		cloudwatch.WriteAuthError(w, log, "InvalidClientTokenId",
+		cloudwatch.WriteAuthError(w, r, log, "InvalidClientTokenId",
 			"The security token included in the request is invalid.", http.StatusForbidden)
 	case errors.Is(err, ErrUnavailable):
 		log.Error("credential lookup unavailable", "access_key_id", accessKeyID, "error", err)
-		cloudwatch.WriteAuthError(w, log, "ServiceUnavailable",
+		cloudwatch.WriteAuthError(w, r, log, "ServiceUnavailable",
 			"The credential store is temporarily unavailable.", http.StatusServiceUnavailable)
 	default:
 		log.Error("credential lookup failed", "access_key_id", accessKeyID, "error", err)
-		cloudwatch.WriteAuthError(w, log, "InternalFailure",
+		cloudwatch.WriteAuthError(w, r, log, "InternalFailure",
 			"The request processing has failed because of an unknown error.",
 			http.StatusInternalServerError)
 	}
