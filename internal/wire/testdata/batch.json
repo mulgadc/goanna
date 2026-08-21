@@ -1,0 +1,87 @@
+{
+  "ts": 1787279400000,
+  "period_seconds": 60,
+  "node": "env13-ironbark",
+  "series": [
+    {
+      "name": "goanna_ec2_cpu_utilization",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 12.5,
+      "unit": "Percent"
+    },
+    {
+      "name": "goanna_ec2_network_in_bytes",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 4096,
+      "unit": "Bytes"
+    },
+    {
+      "name": "goanna_ec2_network_out_bytes",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 8192,
+      "unit": "Bytes"
+    },
+    {
+      "name": "goanna_ec2_disk_read_bytes",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 65536,
+      "unit": "Bytes"
+    },
+    {
+      "name": "goanna_ec2_disk_write_bytes",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 131072,
+      "unit": "Bytes"
+    },
+    {
+      "name": "goanna_ec2_disk_read_ops",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 17,
+      "unit": "Count"
+    },
+    {
+      "name": "goanna_ec2_disk_write_ops",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 33,
+      "unit": "Count"
+    },
+    {
+      "name": "goanna_ec2_memory_actual_bytes",
+      "labels": {
+        "account_id": "123456789012",
+        "instance_id": "i-0abc123def4567890",
+        "namespace": "AWS/EC2"
+      },
+      "value": 1073741824,
+      "unit": "Bytes"
+    }
+  ]
+}
