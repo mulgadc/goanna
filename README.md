@@ -33,7 +33,9 @@ Goanna has **no Go module dependency on spinifex, and spinifex has none on Goann
 | cold tier | S3 to predastore (Phase 3) |
 | alarm actions | SNS-over-NATS (Phase 4) |
 
-This is why `internal/wire` declares its own decode structs rather than importing spinifex's. The contract is the JSON on the subject; the agreement is held by a fixture generated from the producer's own types, not by a shared package.
+This is why `internal/wire` declares its own decode structs rather than importing spinifex's. The contract is the JSON on the subject, and the agreement is held by a fixture **captured from the live subject** — not one built from the producer's types. A hand-built fixture agrees on field names while saying nothing about their units, and that gap is exactly how a seconds timestamp reached a millisecond appender. Recapture from a running node when the producer changes.
+
+`ts` on the wire is Unix **seconds**. The TSDB indexes milliseconds, so `Batch.TimestampMS` is the only thing that may reach an appender, and `Validate` rejects a timestamp outside plausible-seconds range so a producer switching units fails loudly instead of filing every sample in the year 58000.
 
 Goanna also owns the JetStream stream definition. JetStream captures a message by subject regardless of which API published it, so the producer's existing core-NATS publish lands in the stream unchanged and no spinifex change is needed for durability or replay. `TestCorePublishIsCapturedByTheStream` is that claim as a test.
 

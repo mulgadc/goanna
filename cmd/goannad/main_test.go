@@ -69,7 +69,7 @@ func TestRunIngestsAndShutsDown(t *testing.T) {
 	defer nc.Close()
 
 	payload, err := json.Marshal(map[string]any{
-		"ts":             time.Now().UnixMilli(),
+		"ts":             time.Now().Unix(),
 		"period_seconds": 60,
 		"series": []map[string]any{
 			{"name": "goanna_ec2_cpu_utilization", "value": 12.5},
