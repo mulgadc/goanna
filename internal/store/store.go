@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -104,14 +105,115 @@ func seriesLabels(instanceID string, s wire.Series) labels.Labels {
 	return b.Labels()
 }
 
-// Querier returns a querier over the given millisecond range. The caller
-// closes it.
+// Querier returns an unscoped querier over the given millisecond range. The
+// caller closes it.
+//
+// This reaches every tenant's series. The CloudWatch API must not use it —
+// see TenantQuerier.
 func (s *Store) Querier(mint, maxt int64) (storage.Querier, error) {
 	q, err := s.db.Querier(mint, maxt)
 	if err != nil {
 		return nil, fmt.Errorf("store: querier: %w", err)
 	}
 	return q, nil
+}
+
+// LabelAccountID is the tenant boundary. It is written from the publisher's
+// account and, on the read path, only ever from a verified signature.
+const LabelAccountID = "account_id"
+
+// ErrNoAccount is returned when a scoped operation is attempted without an
+// account. An empty account_id matcher would select every series that carries
+// no account label at all, so it can never be treated as "unset".
+var ErrNoAccount = errors.New("store: account id is required")
+
+// TenantQuerier is a querier that can only see one account's series.
+//
+// The CloudWatch handlers are written against this type rather than
+// storage.Querier so there is no code path from a handler to an unscoped read.
+// Prometheus ANDs matchers, so the scope below is a ceiling: no combination of
+// caller-supplied matchers can widen it.
+type TenantQuerier struct {
+	q     storage.Querier
+	scope *labels.Matcher
+}
+
+// TenantQuerier opens a querier scoped to accountID over the millisecond range
+// [mint, maxt]. The caller closes it.
+func (s *Store) TenantQuerier(accountID string, mint, maxt int64) (*TenantQuerier, error) {
+	if accountID == "" {
+		return nil, ErrNoAccount
+	}
+	scope, err := labels.NewMatcher(labels.MatchEqual, LabelAccountID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("store: scope matcher: %w", err)
+	}
+	q, err := s.Querier(mint, maxt)
+	if err != nil {
+		return nil, err
+	}
+	return &TenantQuerier{q: q, scope: scope}, nil
+}
+
+// Select runs a query with the account scope prepended to the caller's
+// matchers.
+func (t *TenantQuerier) Select(ctx context.Context, sortSeries bool, hints *storage.SelectHints,
+	matchers ...*labels.Matcher) storage.SeriesSet {
+	scoped := make([]*labels.Matcher, 0, len(matchers)+1)
+	scoped = append(scoped, t.scope)
+	scoped = append(scoped, matchers...)
+	return t.q.Select(ctx, sortSeries, hints, scoped...)
+}
+
+// Close releases the underlying querier.
+func (t *TenantQuerier) Close() error {
+	if err := t.q.Close(); err != nil {
+		return fmt.Errorf("store: close tenant querier: %w", err)
+	}
+	return nil
+}
+
+// Point is one sample to append on behalf of a tenant.
+type Point struct {
+	Name      string
+	Labels    map[string]string
+	Timestamp int64 // milliseconds
+	Value     float64
+}
+
+// AppendTenant writes points on behalf of accountID, stamping the account
+// label itself. Any account_id in a point's labels is discarded, so a caller
+// cannot file samples under another tenant.
+func (s *Store) AppendTenant(ctx context.Context, accountID string, points []Point) error {
+	if accountID == "" {
+		return ErrNoAccount
+	}
+
+	app := s.db.Appender(ctx)
+	for _, p := range points {
+		if p.Name == "" {
+			continue
+		}
+		b := labels.NewBuilder(labels.EmptyLabels())
+		for name, value := range p.Labels {
+			if value != "" {
+				b.Set(name, value)
+			}
+		}
+		b.Set(model.MetricNameLabel, p.Name)
+		b.Set(LabelAccountID, accountID)
+
+		if _, err := app.Append(0, b.Labels(), p.Timestamp, p.Value); err != nil {
+			if rbErr := app.Rollback(); rbErr != nil {
+				s.log.Warn("rollback after failed tenant append", "error", rbErr)
+			}
+			return fmt.Errorf("store: append %s: %w", p.Name, err)
+		}
+	}
+	if err := app.Commit(); err != nil {
+		return fmt.Errorf("store: commit tenant points: %w", err)
+	}
+	return nil
 }
 
 // Ready reports whether the TSDB can still be read. It opens and closes a

@@ -1,7 +1,6 @@
-// Command goannad ingests per-VM metrics from NATS into a local TSDB.
-//
-// Phase 1: there is no CloudWatch API yet. This exists to get tenant
-// metrics durable and queryable.
+// Command goannad ingests per-VM metrics from NATS into a local TSDB and
+// serves them over a SigV4-authenticated CloudWatch API. The API is opt-in:
+// without --api-addr the daemon only ingests.
 package main
 
 import (
@@ -35,6 +34,15 @@ type config struct {
 	logLevel   string
 	streamName string
 	healthAddr string
+
+	// CloudWatch API. apiAddr is empty when the API is not being served,
+	// which is how a node runs ingest-only.
+	apiAddr          string
+	tlsCert          string
+	tlsKey           string
+	masterKeyPath    string
+	accessKeysBucket string
+	region           string
 }
 
 func main() {
@@ -121,6 +129,18 @@ func run(ctx context.Context, cfg config) error {
 		return in.Run(gctx)
 	})
 
+	if cfg.apiAddr != "" {
+		handler, provider, err := buildAPI(cfg, metrics, nc, logger)
+		if err != nil {
+			return err
+		}
+		defer provider.Close()
+		group.Go(func() error {
+			logger.Info("serving cloudwatch api", "addr", cfg.apiAddr, "region", cfg.region)
+			return serveTLS(gctx, cfg, handler)
+		})
+	}
+
 	if err := group.Wait(); err != nil {
 		return err
 	}
@@ -139,6 +159,12 @@ func parseFlags(fs *flag.FlagSet, args []string) (config, error) {
 	fs.StringVar(&cfg.logLevel, "log-level", env("GOANNA_LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&cfg.healthAddr, "health-addr", env("GOANNA_HEALTH_ADDR", "127.0.0.1:8445"), "liveness, readiness and status listener")
 	fs.StringVar(&cfg.streamName, "stream", env("GOANNA_STREAM", ingest.DefaultStream), "JetStream stream name")
+	fs.StringVar(&cfg.apiAddr, "api-addr", env("GOANNA_API_ADDR", ""), "CloudWatch API listener; empty serves ingest only")
+	fs.StringVar(&cfg.tlsCert, "tls-cert", env("GOANNA_TLS_CERT", ""), "PEM certificate for the API listener")
+	fs.StringVar(&cfg.tlsKey, "tls-key", env("GOANNA_TLS_KEY", ""), "PEM private key for the API listener")
+	fs.StringVar(&cfg.masterKeyPath, "master-key", env("GOANNA_MASTER_KEY", "/etc/spinifex/master.key"), "shared IAM master key")
+	fs.StringVar(&cfg.accessKeysBucket, "access-keys-bucket", env("GOANNA_ACCESS_KEYS_BUCKET", ""), "IAM access-keys KV bucket")
+	fs.StringVar(&cfg.region, "region", env("GOANNA_REGION", "ap-southeast-2"), "region clients must sign with")
 	fs.DurationVar(&cfg.retention, "retention", 15*24*time.Hour, "how long to keep samples locally")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
